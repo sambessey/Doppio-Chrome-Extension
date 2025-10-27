@@ -1,10 +1,25 @@
 <script>
   import { interactionCanvas } from "../content/interaction-helpers";
+
+  // Centralized selector configuration
+  // Update these when Google Slides changes their DOM structure
+  const SELECTORS = {
+    PRESENTATION_IFRAME: {
+      primary: "punch-present-iframe",
+      fallbacks: ["punch-viewer-iframe", "presentation-iframe"],
+    },
+    FULLSCREEN_OVERLAY: {
+      primary: "punch-full-screen-element punch-full-window-overlay",
+      fallbacks: ["punch-fullscreen", "full-screen-overlay"],
+    },
+    // Last verified: 2025-10-20
+  };
+
   let currentSlideId = window.location.href.split("slide=id.")[1];
-  let hasGraph = false;
   let presentingState = false;
   let intervalId = 0;
   let interactiveDOM;
+  let pendingInjections = new Set(); // Track slides waiting for injection
   let eventCode = "0";
 
   function getCurrentSlideId() {
@@ -23,13 +38,39 @@
     clearInterval(i);
   }
 
-  function waitForElement(selector, timeout = 6000) {
+  /**
+   * Finds an element using multiple selector strategies
+   * @param {Object} selectorConfig - Config with primary and fallback selectors
+   * @param {Document} doc - Document to search in (default: document)
+   * @returns {Element|null} - Found element or null
+   */
+  function findElementWithFallback(selectorConfig, doc = document) {
+    const selectors = [
+      selectorConfig.primary,
+      ...(selectorConfig.fallbacks || []),
+    ];
+
+    for (const selector of selectors) {
+      const element = doc.getElementsByClassName(selector)[0];
+      if (element) {
+        if (selector !== selectorConfig.primary) {
+          console.warn(`Using fallback selector: ${selector}`);
+        }
+        return element;
+      }
+    }
+
+    console.error("All selector strategies failed:", selectors);
+    return null;
+  }
+
+  function waitForElement(selectorConfig, timeout = 6000) {
     return new Promise((resolve, reject) => {
-      const interval = 2000; // Check every 100ms
+      const interval = 2000;
       let elapsedTime = 0;
 
       const checkElement = () => {
-        interactiveDOM = document.getElementsByClassName(selector)[0];
+        interactiveDOM = findElementWithFallback(selectorConfig);
         if (interactiveDOM && interactiveDOM.contentDocument.body?.firstChild) {
           resolve(interactiveDOM);
         } else if (elapsedTime >= timeout) {
@@ -45,59 +86,63 @@
   }
 
   function findCanvasInSlide(currentSlide, isFirstSlide) {
-    waitForElement("punch-present-iframe")
-      .then((element) => {
-        //   const firstQuerySelector = interactiveDOM.contentDocument.querySelector("body > div:nth-child(12) > div.punch-viewer-container > div > div > div > div:nth-child(2) > div.punch-viewer-svgpage-svgcontainer");
-        //    if (firstQuerySelector) console.log('FIRST QS!');
-        //   const secondQuerySelector = interactiveDOM.contentDocument.querySelector("body > div:nth-child(12) > div.punch-viewer-container > div > div > div > div > div.punch-viewer-svgpage-svgcontainer");
-        //    if (secondQuerySelector && !secondQuerySelector.querySelector("#DoppioInteractionCanvas")){
-        //      if (secondQuerySelector) console.log('SECOND QS!');
-        //      const element = secondQuerySelector.querySelector(`#${currentSlideId}-bg`)?.firstChild?.firstChild;
-        //const targetElement = currentSlide ? currentSlide : element.contentDocument.getElementById(`${currentSlideId}`);
-        //const targetElement = element.contentDocument.getElementById(`${currentSlide}`);
+    // Check if already injecting for this slide
+    if (pendingInjections.has(currentSlide)) {
+      console.log("Injection already pending for", currentSlide);
+      return;
+    }
 
+    waitForElement(SELECTORS.PRESENTATION_IFRAME)
+      .then((element) => {
         let targetElement = element.contentDocument.getElementById(
           `${currentSlide}`
         );
-        // let debugElement = element.contentDocument.querySelector("body > div:nth-child(13) > div.sketchyViewerContainer > div > div > div > div > div.punch-viewer-svgpage-svgcontainer > svg")
-        let debugElement = element.contentDocument.querySelector(
-          "body > div:nth-child(13) > div.sketchyViewerContainer > div > div > div > div"
-        );
-        const children = targetElement ? targetElement.children : null;
-        const secondChild = children ? children[1] : null;
-        console.log(
-          "BUILDING INTERACTION OBJECT",
-          targetElement,
-          children,
-          secondChild
-        );
+
+        console.log("BUILDING INTERACTION OBJECT", targetElement);
+
         if (
           targetElement &&
-          !targetElement.querySelector("#DoppioInteractionCanvas")
+          !targetElement.querySelector(
+            `#DoppioInteractionCanvas_${currentSlide}`
+          )
         ) {
-          const element = targetElement;
-          if (element) {
-            console.log("Element found", element, "using", eventCode);
-            let interactionObject = interactionCanvas({
-              eventCode: eventCode,
-              userId: "sam@doppio.live",
-              slideId: currentSlideId,
-            });
-            if (isFirstSlide) {
-              setTimeout(() => {
-                element.appendChild(interactionObject);
-              }, 5000);
-            } else {
-              element.appendChild(interactionObject);
-            }
-            //     }
+          console.log("Element found", targetElement, "using", eventCode);
+
+          let interactionObject = interactionCanvas({
+            eventCode: eventCode,
+            userId: "sam@doppio.live",
+            slideId: currentSlide, // Use the parameter, not the global variable
+          });
+
+          if (isFirstSlide) {
+            pendingInjections.add(currentSlide); // Mark as pending
+            setTimeout(() => {
+              // Double-check before injecting
+              if (
+                !targetElement.querySelector(
+                  `#DoppioInteractionCanvas_${currentSlide}`
+                )
+              ) {
+                targetElement.appendChild(interactionObject);
+                console.log("Injected canvas into", currentSlide, "(delayed)");
+              } else {
+                console.log(
+                  "Canvas already exists, skipping delayed injection"
+                );
+              }
+              pendingInjections.delete(currentSlide); // Clear pending flag
+            }, 5000);
           } else {
-            console.log("Element is null or undefined");
+            targetElement.appendChild(interactionObject);
+            console.log("Injected canvas into", currentSlide, "(immediate)");
           }
+        } else {
+          console.log("Element is null or undefined");
         }
       })
       .catch((error) => {
-        console.error(error);
+        console.error("Failed to inject canvas:", error);
+        pendingInjections.delete(currentSlide); // Clear on error
       });
   }
 
@@ -121,10 +166,40 @@
     return currentSlide;
   }
 
+  /**
+   * Handles slide changes in edit mode (non-presenting)
+   * Called by both hashchange event and MutationObserver
+   */
+  function handleEditModeSlideChange() {
+    if (presentingState) return; // Only handle in edit mode
+
+    const slideIdMatch = getCurrentSlideId();
+    const slidesId = getSlidesId();
+
+    if (slideIdMatch) {
+      const newSlideId = slideIdMatch[1];
+
+      if (newSlideId !== currentSlideId) {
+        const oldSlideId = currentSlideId;
+        currentSlideId = newSlideId;
+
+        console.log("Edit mode slide change:", newSlideId, "from:", oldSlideId);
+
+        chrome.runtime.sendMessage({
+          type: "CHANGE_CURSOR_EDIT",
+          payload: {
+            cursor: newSlideId,
+            slidesId: slidesId,
+            oldSlideId: oldSlideId,
+          },
+        });
+        console.log("pinged with", newSlideId, "(edit mode)");
+      }
+    }
+  }
+
   async function checkPresenting() {
-    const element = document.getElementsByClassName(
-      "punch-full-screen-element punch-full-window-overlay"
-    )[0];
+    const element = findElementWithFallback(SELECTORS.FULLSCREEN_OVERLAY);
     const isPresenting = !!element;
     if (presentingState !== isPresenting) {
       presentingState = isPresenting;
@@ -139,7 +214,6 @@
             eventCode
           );
 
-          // Wait for eventCode to be populated first
           eventCode = await new Promise((resolve, reject) => {
             chrome.runtime.sendMessage(
               {
@@ -163,7 +237,6 @@
             );
           });
 
-          // Now call findCanvasInSlide with the correct eventCode
           findCanvasInSlide(currentSlideId[1], true);
 
           let returnedSlide = "";
@@ -175,7 +248,6 @@
         if (currentSlideId && slidesId) {
           console.log("User STOPPED presenting");
           clearObserverInterval(intervalId);
-          // observer.disconnect();
           chrome.runtime.sendMessage(
             {
               type: "START_STOP_PRESENTING",
@@ -199,44 +271,20 @@
     for (const mutation of mutationsList) {
       console.log("if next");
       if (mutation.type === "childList") {
-        // Check the current URL or slide ID
-        //const hash = window.location.hash;
-        const slideIdMatch = getCurrentSlideId();
-        const slidesId = getSlidesId();
-        let oldSlideId = null;
-        if (slideIdMatch) {
-          const newSlideId = slideIdMatch[1];
-          console.log("SLIDE ID MATCH", slideIdMatch, newSlideId);
-
-          if (newSlideId !== currentSlideId) {
-            oldSlideId = currentSlideId;
-            currentSlideId = newSlideId;
-            if (!presentingState) {
-              console.log(
-                "MUTATION OBSERVER",
-                newSlideId,
-                slidesId,
-                oldSlideId
-              );
-              chrome.runtime.sendMessage({
-                type: "CHANGE_CURSOR_EDIT",
-                payload: {
-                  cursor: newSlideId,
-                  slidesId: slidesId,
-                  oldSlideId: oldSlideId,
-                },
-              });
-              console.log("pinged with", newSlideId);
-            }
-          }
-        }
+        handleEditModeSlideChange();
       }
     }
-    // Check if the user is presenting
     checkPresenting();
   });
 
   console.log("popup/index.ts");
+
+  // Listen for URL hash changes (primary detection method for edit mode)
+  window.addEventListener("hashchange", () => {
+    console.log("Hash changed detected");
+    handleEditModeSlideChange();
+  });
+
   document.addEventListener("fullscreenchange", () => {
     console.log("listening for fullscreenchange");
     if (document.fullscreenElement) {
@@ -244,14 +292,11 @@
     } else {
       console.log("Exited fullscreen mode");
     }
-    // Check if the user is presenting
     checkPresenting();
   });
 
-  // Start observing the document with the configured parameters
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Initial check for presenting mode
   checkPresenting();
 </script>
 

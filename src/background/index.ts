@@ -23,41 +23,12 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   })
 });
 
-/*chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status && changeInfo.status === 'complete')
-  {
-    console.log('CALLING GET EVENT - AL');
-    getEvent()
-  .then((result) => {
-    console.log('SAW THIS',result.meta.eventId);
-    console.log(tab)
-  })
-  }
-});*/
-
-//chrome.tabs.onUpdated.addListener(handleUpdated, filter);
-/* None of the below works because SW is stateless and it takes time for chrome storage to set
-chrome.tabs.onUpdated.addListener(() => {
-  let currentTime = new Date().getTime();
-      chrome.storage.local.get(['lastPingSlideChange'], function(result) {
-        console.log('cur',currentTime)
-        console.log('ret',result.lastPingSlideChange)
-        if(result.lastPingSlideChange && result.lastPingSlideChange < new Date().getTime()-500){
-          console.log('THIS WOULD REFRESH');
-          chrome.storage.local.set({ lastPingSlideChange: currentTime });
-        }
-      });
-});
-*/
-
-
-
-
 async function getEvent(mediaId?: string) {
   try {
     console.log('GET EVENT IS CALLED,', mediaId)
+    const apiUrl = import.meta.env.VITE_API_URL || 'https://localdev.doppio.us';
     const response = await restRefreshEventId({
-      url: 'https://localdev.doppio.us/findeventusingmediaid',
+      url: `${apiUrl}/findeventusingmediaid`,
       uid: 'sam@doppio.live',
       mediaId: mediaId
     });
@@ -182,9 +153,10 @@ self.addEventListener('message', (event) => {
       (async () => {
         try {
           console.log('in startstop presenting', request.payload);
+          const apiUrl = import.meta.env.VITE_API_URL || 'https://localdev.doppio.us';
           let startStop = request.payload.command;
           let response = await restStartStopPresentation({
-            url: `https://localdev.doppio.us/${startStop}`,
+            url: `${apiUrl}/${startStop}`,
             uid: "sam@doppio.live",
             currentSlide: request.payload.currentSlide,
             mediaId: request.payload.mediaId
@@ -210,8 +182,9 @@ self.addEventListener('message', (event) => {
             cursor: request.payload.cursor,
             slidesId: request.payload.slidesId
           });
+          const apiUrl = import.meta.env.VITE_API_URL || 'https://localdev.doppio.us';
           const result = await restUpdateCursor({
-            url: "https://localdev.doppio.us/moveslide",
+            url: `${apiUrl}/moveslide`,
             uid: "sam@doppio.live",
             eventId: eventId.meta.eventId,
             prevSlide: request.payload.oldSlideId,

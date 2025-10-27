@@ -1,4 +1,4 @@
-import { defineManifest, WebAccessibleResourceByMatch } from "@crxjs/vite-plugin";
+import { defineManifest } from "@crxjs/vite-plugin";
 import packageJson from "../package.json";
 
 const { version, name, description } = packageJson;
@@ -24,7 +24,7 @@ export default defineManifest(async (env) => ({
     },
     content_scripts: [
         {
-            matches: ["https://*/*"],
+            matches: ["https://docs.google.com/presentation/*"],
             js: ["src/content/index.ts"],
         },
     ],
